@@ -74,6 +74,18 @@ def plan_hold_hits(events: List[ChartEvent]) -> List[ChartEvent]:
     for ev in events:
         if ev.kind != EventKind.TAP:
             continue
+        if ev.ibms_id == "0E" and ev.lane == Lane.BOTH:
+            # A hold tail covers only its own half of a simultaneous two-lane
+            # hit. Keep a fresh press for the other lane instead of dropping
+            # the whole 0E event (Rush-Hour map3, 19.018 s).
+            covered = {
+                lane for _, end, lane in occupies
+                if abs(ev.t_sec - end) <= 0.012
+            }
+            if covered == {Lane.AIR}:
+                ev.lane = Lane.GROUND
+            elif covered == {Lane.GROUND}:
+                ev.lane = Lane.AIR
         if _at_hold_start(ev, occupies) or (
             ev.note_type != NoteType.BOSS_MELEE and _near_hold_end(ev, occupies)
         ):
