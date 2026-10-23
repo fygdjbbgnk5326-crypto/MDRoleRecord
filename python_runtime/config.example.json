@@ -1,0 +1,25 @@
+{
+  "mdm_path": "",
+  "bundle_dir": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Muse Dash\\MuseDash_Data\\StreamingAssets\\aa\\StandaloneWindows64",
+  "dictionary": "",
+  "map_index": 3,
+  "keys": {
+    "air": "d",
+    "ground": "j",
+    "air_alt": "f",
+    "ground_alt": "k"
+  },
+  "timing": {
+    "device_delay_sec": 0.0,
+    "inject_delay_sec": 0.012,
+    "tick_interval": 0.001,
+    "pulse_duration": 0.04,
+    "mash_frequency": 12.0
+  },
+  "session": {
+    "grace_tail_sec": 2.0,
+    "watchdog_sec": 10.0
+  },
+  "debug": false,
+  "log_level": "INFO"
+}

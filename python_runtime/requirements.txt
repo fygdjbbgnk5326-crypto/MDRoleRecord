@@ -1,0 +1,8 @@
+# 核心依赖（无视觉依赖）
+# Python >= 3.9
+
+# 可选：音频时长读取
+mutagen>=1.47.0
+
+# 读取官包 music_*.bundle / notedata
+UnityPy>=1.21.0

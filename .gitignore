@@ -1,0 +1,14 @@
+/action_cache/
+/dll_backups/
+/obj/
+/out/
+/.vs/
+/_tno_fields.py
+**/__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.user
+*.suo
+/python_runtime/config.json
+/generator_settings.json
