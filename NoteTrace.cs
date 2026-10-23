@@ -18,7 +18,7 @@ namespace MDRoleRecord;
 /// d_* 是上一帧以来的增量，后面的 total_* 是累计值。
 /// d_miss > 0        = 漏接音符（combo break）
 /// d_hit_enemy > 0   = 撞敌人/齿轮
-/// d_hurt_miss > 0   = 漏并受击（撞齿轮）
+/// d_hurt_miss > 0   = 受击型漏判（齿轮或 Boss 近战等）
 /// </summary>
 internal static class NoteTrace
 {

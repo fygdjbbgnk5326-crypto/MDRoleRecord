@@ -74,8 +74,11 @@ def plan_hold_hits(events: List[ChartEvent]) -> List[ChartEvent]:
     for ev in events:
         if ev.kind != EventKind.TAP:
             continue
-        if _at_hold_start(ev, occupies) or _near_hold_end(ev, occupies):
-            # 起点跟长按共用 down；终点 12ms 内跟松键冲突，不再叠一次。
+        if _at_hold_start(ev, occupies) or (
+            ev.note_type != NoteType.BOSS_MELEE and _near_hold_end(ev, occupies)
+        ):
+            # 起点跟长按共用 down；普通短音在终点 12ms 内不再叠一次。
+            # Boss 近战是独立判定：长条松键不会击中它。
             ev.skip = True
             n_skip += 1
             continue
