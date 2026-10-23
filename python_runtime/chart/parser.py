@@ -63,6 +63,7 @@ class ChartEvent:
     map_n: int
     use_alt: bool = False
     skip: bool = False
+    hold_tail_repress_at_sec: Optional[float] = None
 
 
 @dataclass

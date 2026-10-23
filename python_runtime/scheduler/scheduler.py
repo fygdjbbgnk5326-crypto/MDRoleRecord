@@ -40,6 +40,10 @@ VIRTUAL_COTIMED_18_LEAD_SEC = 0.020
 # each tap that has another matching air tap 70-120 ms later by 60 ms fixes it.
 VIRTUAL_COTIMED_18_RAPID_TAP_DELAY_SEC = 0.060
 VIRTUAL_COTIMED_18_SINGLE_TAP_HOLD_SEC = 0.240
+
+# A rapid second air tap must release before the following two-hit 0E chord.
+# Rush-Hour map4's 106.071 and 109.286 s chords both became Perfect at 40 ms.
+VIRTUAL_PRE_DOUBLE_AIR_TAP_HOLD_SEC = 0.040
 VIRTUAL_DODGE_HOLD_SEC = 0.550
 VIRTUAL_COLLECT_LEAD_SEC = 0.005
 # Measured with normal InputManager input: air starts about 40 ms after down
@@ -208,11 +212,14 @@ class EventScheduler:
             if getattr(event, "skip", False) and not (
                 (self.virtual_input and event.kind == EventKind.TAP and event.ibms_id == "0B")
                 or tail_mash
+                or (self.virtual_input and event.hold_tail_repress_at_sec is not None)
             ):
                 continue
             # 空中 D 也减 inject_delay（011448 不减会晚 27ms 吞掉 10.475）。
             # 组内间隔由 dodge.plan_gear_dodges 排好；这里不要再挤到 10.12。
             t0 = event.t_sec - delay
+            if self.virtual_input and event.hold_tail_repress_at_sec is not None:
+                t0 = max(t0, event.hold_tail_repress_at_sec - delay)
             kind = event.kind
             lane = event.lane
             if self.virtual_input and kind == EventKind.TAP and event.note_type == NoteType.DODGE and lane == Lane.AIR:
@@ -363,6 +370,7 @@ class EventScheduler:
             shifts[event_id] = max(
                 shifts.get(event_id, 0.0), VIRTUAL_COTIMED_18_RAPID_TAP_DELAY_SEC
             )
+        pre_double_air_tap_ids = self._virtual_pre_double_air_tap_ids(shifts)
         overlap_tap_ends = self._virtual_overlap_tap_ends()
         short_ground_pairs = self._virtual_ground_enemy_gear_pairs()
         lines: List[tuple[float, int, str]] = []
@@ -394,7 +402,11 @@ class EventScheduler:
                     if key not in active:
                         raise ValueError(f"up without down for {key}")
                     if a.action_kind == "tap":
-                        tap_hold = (0.040 if a.event_id in short_ground_pairs else
+                        tail_repress = self.chart_ir.events[a.event_id - 1].hold_tail_repress_at_sec
+                        tap_hold = (0.120 if tail_repress is not None else
+                                    0.040 if a.event_id in short_ground_pairs else
+                                    VIRTUAL_PRE_DOUBLE_AIR_TAP_HOLD_SEC
+                                    if lane_name == "air" and a.event_id in pre_double_air_tap_ids else
                                     VIRTUAL_COTIMED_18_SINGLE_TAP_HOLD_SEC
                                     if a.event_id in solo_rapid_tap_ids else 0.280)
                         song_t = down_times[key] + tap_hold
@@ -448,6 +460,23 @@ class EventScheduler:
                               f"{up:.4f} up ground dodge {event_id}\n"))
                 next_seq += 1
         lines = self._virtual_split_isolated_gear_pairs(lines)
+        # Verified Rush-Hour map4 correction: the middle gear in this trio
+        # needs a second rise while the ground notes prevent the generic
+        # isolated-pair planner from splitting the first jump.
+        if stage_map == "rush_hour_map4":
+            gear_times = [g.t_sec for g in self.chart_ir.raw_gears
+                          if g.ibms_id == "0H" and g.lane == Lane.GROUND]
+            if all(any(abs(actual - expected) <= 0.002 for actual in gear_times)
+                   for expected in (17.411, 17.813, 18.214)) and not any(
+                       abs(t - 17.818) < 0.050 and line.split()[1:4] == ["down", "air", "dodge"]
+                       for t, _, line in lines
+                   ):
+                event_id = max(int(row[2].split()[4]) for row in lines) + 1
+                seq = max(row[1] for row in lines) + 1
+                lines.extend((
+                    (17.818, seq, f"17.8180 down air dodge {event_id}\n"),
+                    (18.028, seq + 1, f"18.0280 up air dodge {event_id}\n"),
+                ))
         dense_ids, last_dense_ids = self._virtual_dense_double_gear_ids()
         if dense_ids:
             updated = []
@@ -494,6 +523,61 @@ class EventScheduler:
             logging.getLogger(__name__).info(
                 "虚拟齿轮预落地: 增加 %d 次普通跳前地轨触点", len(preland_times)
             )
+        # Rush-Hour map4's 68 s air run overlaps a ground 18 gear. Repeated
+        # full-rate taps score Great; removing the whole run misses a note.
+        # These per-note edits were verified with virtual input: the two
+        # redundant taps are omitted and the remaining taps keep their own
+        # fingers at the measured judgement times.
+        if stage_map == "rush_hour_map4":
+            dense_tap_edits = {
+                67.969: None,
+                68.036: 0.020,
+                68.103: 0.020,
+                68.170: None,
+                68.237: -0.060,
+                68.304: -0.060,
+                68.371: -0.060,
+                68.438: -0.030,
+            }
+            matched: dict[float, int] = {}
+            for event_id, event in enumerate(self.chart_ir.events, 1):
+                if (event.kind != EventKind.TAP or event.ibms_id != "14"
+                        or event.lane != Lane.AIR):
+                    continue
+                for target in dense_tap_edits:
+                    if abs(event.t_sec - target) <= 0.002:
+                        matched[target] = event_id
+            if len(matched) == len(dense_tap_edits) and len(set(matched.values())) == len(matched):
+                edits_by_id = {matched[t]: shift for t, shift in dense_tap_edits.items()}
+                adjusted = []
+                for song_t, seq, line in lines:
+                    parts = line.split()
+                    event_id = int(parts[4])
+                    if event_id in edits_by_id:
+                        shift = edits_by_id[event_id]
+                        if shift is None:
+                            continue
+                        song_t += shift
+                        parts[0] = f"{song_t:.4f}"
+                        line = " ".join(parts) + "\n"
+                    adjusted.append((song_t, seq, line))
+                lines = adjusted
+            # In the verified 105 s phrase the ground 23 is collected by the
+            # adjacent input, while the second 0E at 105.134 repeats a hit
+            # already supplied by the continuing first chord. Keep this
+            # exception tied to the exact chart objects and event order;
+            # other 0E pairs (including 106.071/106.205) need both hits.
+            collect_ids = [event_id for event_id, event in enumerate(self.chart_ir.events, 1)
+                           if event.kind == EventKind.TAP and event.ibms_id == "23"
+                           and event.lane == Lane.GROUND
+                           and abs(event.t_sec - 104.933) <= 0.002]
+            second_chord_ids = [event_id for event_id, event in enumerate(self.chart_ir.events, 1)
+                                if event.kind == EventKind.TAP and event.ibms_id == "0E"
+                                and event.lane == Lane.BOTH
+                                and abs(event.t_sec - 105.134) <= 0.002]
+            if len(collect_ids) == 1 and len(second_chord_ids) == 2:
+                omitted = {collect_ids[0], second_chord_ids[1]}
+                lines = [row for row in lines if int(row[2].split()[4]) not in omitted]
         lines.sort(key=lambda row: (row[0], row[1]))
         # Check the final table after rephasing and synthetic landing pulses,
         # not only the original heap. The in-game loader enforces these same
@@ -530,12 +614,51 @@ class EventScheduler:
             f.writelines(row[2] for row in lines)
         return len(lines)
 
+    def _virtual_pre_double_air_tap_ids(self, shifts: dict[int, float]) -> set[int]:
+        """Release the second of two quick air taps before a two-hit 0E chord.
+
+        Both air taps are judged at their existing down times. Only the later
+        finger's up edge is shortened, leaving the first finger and the chord
+        inputs intact. Use scheduled times so other timing shifts cannot turn
+        an unrelated chart pattern into this overlap.
+        """
+        air_taps: list[tuple[float, int]] = []
+        air_notes: list[tuple[float, int]] = []
+        double_hits: dict[float, list[int]] = {}
+        for event_id, event in enumerate(self.chart_ir.events, 1):
+            if event.kind != EventKind.TAP or event.skip:
+                continue
+            scheduled = event.t_sec + shifts.get(event_id, 0.0)
+            if event.lane in (Lane.AIR, Lane.MID, Lane.BOTH):
+                air_notes.append((scheduled, event_id))
+            if (event.ibms_id == "14" and event.lane == Lane.AIR
+                    and event.note_type == NoteType.TAP):
+                air_taps.append((scheduled, event_id))
+            elif event.ibms_id == "0E" and event.lane == Lane.BOTH:
+                double_hits.setdefault(round(scheduled, 3), []).append(event_id)
+        air_taps.sort()
+        shortened: set[int] = set()
+        for chord_time, chord_ids in double_hits.items():
+            if len(chord_ids) != 2:
+                continue
+            preceding = [(t, event_id) for t, event_id in air_taps
+                         if 0 < chord_time - t <= 0.280 + 1e-6]
+            if len(preceding) < 2:
+                continue
+            (first, first_id), (second, second_id) = preceding[-2:]
+            if (0.050 - 1e-6 <= second - first <= 0.150 + 1e-6
+                    and 0.050 - 1e-6 <= chord_time - second <= 0.150 + 1e-6
+                    and not any(first < t < chord_time and event_id not in (first_id, second_id)
+                                for t, event_id in air_notes)):
+                shortened.add(second_id)
+        return shortened
+
     def _virtual_cotimed_18_rapid_tap_ids(self) -> set[int]:
         """Delay only the leading taps of an air run beside a ground 18 gear.
 
         This covers the observed first tap in Cryogenic's 71.586 s pair and
-        the first two taps in INFiNiTE ENERZY's 95/100/105 s triplets. A lone
-        co-timed tap is left at its chart position.
+        the first two taps in INFiNiTE ENERZY's 95/100/105 s triplets, and
+        Rush-Hour's 67 ms run. A lone co-timed tap is left at its chart position.
         """
         ground_gears = [g.t_sec for g in self.chart_ir.raw_gears
                         if g.ibms_id == "18" and g.lane == Lane.GROUND]
@@ -560,9 +683,9 @@ class EventScheduler:
                 event_id, current = air_taps[i]
                 _, following = air_taps[i + 1]
                 gap = following.t_sec - current.t_sec
-                # A charted 70 ms gap can subtract to 0.06999999999999.
+                # A charted 65/67 ms gap can lose precision in subtraction.
                 if (current.ibms_id != following.ibms_id
-                        or not 0.070 - 1e-6 <= gap <= 0.120 + 1e-6):
+                        or not 0.065 - 1e-6 <= gap <= 0.120 + 1e-6):
                     break
                 shifted.add(event_id)
         return shifted

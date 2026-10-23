@@ -65,6 +65,24 @@ def plan_hold_hits(events: List[ChartEvent]) -> List[ChartEvent]:
         for lane in _phys_lane(e.lane):
             occupies.append((e.t_sec, e.t_end_sec, lane))
 
+    # Two co-timed 0E notes represent two hits on each lane. A dual-lane
+    # hold tail supplies the first hit; virtual input must press once more
+    # after releasing the hold to clear the second (Rush-Hour map4).
+    double_hits: dict[float, List[ChartEvent]] = {}
+    for ev in events:
+        if ev.kind == EventKind.TAP and ev.ibms_id == "0E" and ev.lane == Lane.BOTH:
+            double_hits.setdefault(ev.t_sec, []).append(ev)
+    for t, group in double_hits.items():
+        if len(group) != 2:
+            continue
+        tail_ends = {
+            lane: max((end for _, end, held_lane in occupies
+                       if held_lane == lane and abs(t - end) <= 0.012), default=None)
+            for lane in (Lane.AIR, Lane.GROUND)
+        }
+        if all(end is not None for end in tail_ends.values()):
+            group[-1].hold_tail_repress_at_sec = max(t, *tail_ends.values()) + 0.0001
+
     n_collect = 0
     n_collect_alt = 0
     n_star_alt = 0
